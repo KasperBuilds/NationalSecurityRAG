@@ -23,10 +23,8 @@ AVAILABLE_COUNTRIES = [
     "Israel", "Singapore", "Brazil", "Mexico", "Poland", "Italy"
 ]
 
-# Initialize clients
 app = FastAPI(title="NSS Document Search")
 
-# Global clients (initialized on startup)
 openai_client = None
 claude_client = None
 collection = None
@@ -41,24 +39,17 @@ class QueryResponse(BaseModel):
     filters: dict
 
 def download_chroma_db(url: str, dest: str):
-    """Download a file from R2 using browser-like headers to bypass Cloudflare 1010 firewall."""
     req = urllib.request.Request(
         url,
         headers={
-            "User-Agent": (
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                "AppleWebKit/605.1.15 (KHTML, like Gecko) "
-                "Version/18.0 Safari/605.1.15"
-            ),
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15",
             "Accept": "*/*",
             "Accept-Language": "en-US,en;q=0.9",
             "Connection": "keep-alive",
         },
     )
-
     with urllib.request.urlopen(req) as response, open(dest, "wb") as out_file:
         out_file.write(response.read())
-
 
 @app.on_event("startup")
 async def startup():
@@ -69,23 +60,16 @@ async def startup():
     if not os.environ.get("ANTHROPIC_API_KEY"):
         raise RuntimeError("Set ANTHROPIC_API_KEY environment variable")
     
-    # Download chroma_db if not present
     if not os.path.exists(CHROMA_PATH) or not os.listdir(CHROMA_PATH):
         print("📥 Database not found. Downloading from R2...")
         zip_path = "/tmp/chroma_db.zip"
-        
-        # Download
         print(f"   Downloading {CHROMA_DB_URL}...")
         download_chroma_db(CHROMA_DB_URL, zip_path)
         print("   Download complete!")
-        
-        # Extract
         print("   Extracting...")
         with zipfile.ZipFile(zip_path, 'r') as zip_ref:
             zip_ref.extractall(".")
         print("   Extraction complete!")
-        
-        # Cleanup
         os.remove(zip_path)
         print("✓ Database ready!")
     
@@ -243,12 +227,10 @@ async def query_documents(request: QueryRequest):
     if not request.query.strip():
         raise HTTPException(status_code=400, detail="Query cannot be empty")
     
-    # Step 1: Understand the query
     parsed = understand_query(request.query)
     filters = build_filters(parsed)
     search_query = parsed.get("search_query", request.query)
     
-    # Step 2: Retrieve relevant chunks
     results = retrieve(search_query, filters=filters if filters else None)
     
     if not results['documents'][0]:
@@ -259,11 +241,9 @@ async def query_documents(request: QueryRequest):
             filters=filters
         )
     
-    # Step 3: Generate answer
     context = format_context(results)
     answer = generate_answer(request.query, context)
     
-    # Format sources
     sources = [
         {
             "country": meta["country"],
@@ -283,27 +263,37 @@ async def query_documents(request: QueryRequest):
 
 @app.get("/api/stats")
 async def get_stats():
-    """Get database statistics"""
     all_meta = collection.get(include=["metadatas"])
     
     countries = {}
     years = set()
+    docs_per_country = {}
     
     for meta in all_meta["metadatas"]:
         country = meta.get("country", "Unknown")
         year = meta.get("year")
+        doc_name = meta.get("doc_name", "")
         
         if country not in countries:
             countries[country] = set()
+        if country not in docs_per_country:
+            docs_per_country[country] = set()
+        
+        docs_per_country[country].add(doc_name)
+        
         if year:
             countries[country].add(year)
             years.add(year)
+    
+    # Convert sets to counts
+    doc_counts = {k: len(v) for k, v in docs_per_country.items()}
     
     return {
         "total_chunks": collection.count(),
         "countries": len(countries),
         "country_list": sorted(countries.keys()),
-        "year_range": [min(years), max(years)] if years else None
+        "year_range": [min(years), max(years)] if years else None,
+        "docs_per_country": doc_counts
     }
 
 @app.get("/", response_class=HTMLResponse)
@@ -313,456 +303,832 @@ async def root():
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NSS Document Search</title>
+    <title>National Security Strategy Intelligence</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <style>
         :root {
-            --bg: #0a0a0a;
-            --surface: #141414;
-            --border: #2a2a2a;
-            --text: #e5e5e5;
-            --text-muted: #737373;
-            --accent: #3b82f6;
-            --accent-dim: #1e3a5f;
+            --bg: #0d1117;
+            --bg-secondary: #161b22;
+            --surface: #1c2128;
+            --border: #30363d;
+            --text: #e6edf3;
+            --text-muted: #8b949e;
+            --text-dim: #6e7681;
+            --gold: #d4a853;
+            --gold-dark: #b8923f;
+            --gold-dim: rgba(212, 168, 83, 0.15);
+            --green: #3fb950;
+            --red: #f85149;
+            --purple-1: #e8e0f0;
+            --purple-2: #d4c4e8;
+            --purple-3: #b9a3d4;
+            --purple-4: #9d7fc0;
+            --purple-5: #7c5aa8;
+            --purple-6: #5c3d8a;
+            --purple-7: #4a2c72;
         }
         
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         
         body {
-            font-family: 'Source Serif 4', Georgia, serif;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
             background: var(--bg);
             color: var(--text);
             min-height: 100vh;
             line-height: 1.6;
         }
         
-        .container {
-            max-width: 900px;
-            margin: 0 auto;
-            padding: 2rem;
-        }
+        .container { max-width: 1000px; margin: 0 auto; padding: 2rem; }
         
-        header {
-            padding: 3rem 0;
-            border-bottom: 1px solid var(--border);
+        /* Hero Section */
+        .hero { text-align: center; padding: 4rem 0 3rem; }
+        
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.5rem 1rem;
+            background: var(--gold-dim);
+            border: 1px solid var(--gold);
+            border-radius: 100px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            color: var(--gold);
             margin-bottom: 2rem;
         }
         
-        h1 {
-            font-size: 1.5rem;
-            font-weight: 600;
-            letter-spacing: -0.02em;
-            margin-bottom: 0.5rem;
+        .badge::before {
+            content: '';
+            width: 6px;
+            height: 6px;
+            background: var(--gold);
+            border-radius: 50%;
         }
         
-        .subtitle {
-            font-family: 'IBM Plex Mono', monospace;
+        .hero h1 {
+            font-size: clamp(2.5rem, 6vw, 4rem);
+            font-weight: 800;
+            line-height: 1.1;
+            margin-bottom: 1.5rem;
+            letter-spacing: -0.02em;
+        }
+        
+        .hero h1 span { color: var(--gold); display: block; }
+        
+        .hero-subtitle {
+            font-size: 1.1rem;
+            color: var(--text-muted);
+            max-width: 600px;
+            margin: 0 auto 3rem;
+            line-height: 1.7;
+        }
+        
+        /* Search Box */
+        .search-container { max-width: 700px; margin: 0 auto 2rem; }
+        
+        .search-box {
+            display: flex;
+            align-items: center;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 0.5rem;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+        
+        .search-box:focus-within {
+            border-color: var(--gold);
+            box-shadow: 0 0 0 3px var(--gold-dim);
+        }
+        
+        .search-icon { padding: 0 1rem; color: var(--text-muted); }
+        .search-icon svg { width: 20px; height: 20px; }
+        
+        #query-input {
+            flex: 1;
+            padding: 1rem 0.5rem;
+            font-family: inherit;
+            font-size: 1rem;
+            background: transparent;
+            border: none;
+            color: var(--text);
+            outline: none;
+        }
+        
+        #query-input::placeholder { color: var(--text-dim); }
+        
+        .search-btn {
+            padding: 0.875rem 1.5rem;
+            background: var(--gold);
+            color: var(--bg);
+            border: none;
+            border-radius: 8px;
+            font-family: inherit;
+            font-size: 0.9rem;
+            font-weight: 600;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            transition: background 0.2s;
+        }
+        
+        .search-btn:hover { background: var(--gold-dark); }
+        .search-btn svg { width: 16px; height: 16px; }
+        
+        .examples {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 0.5rem;
+            margin-bottom: 3rem;
+        }
+        
+        .example-btn {
+            padding: 0.5rem 1rem;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 100px;
+            color: var(--text-muted);
+            font-family: inherit;
+            font-size: 0.8rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .example-btn:hover { border-color: var(--gold); color: var(--gold); }
+        
+        /* Map Section */
+        .map-section {
+            margin-bottom: 3rem;
+            border-radius: 12px;
+            overflow: hidden;
+            border: 1px solid var(--border);
+        }
+        
+        .map-header {
+            background: var(--surface);
+            padding: 1rem 1.5rem;
+            border-bottom: 1px solid var(--border);
+        }
+        
+        .map-header h2 {
+            font-size: 1rem;
+            font-weight: 600;
+            margin-bottom: 0.25rem;
+        }
+        
+        .map-header p {
             font-size: 0.8rem;
             color: var(--text-muted);
         }
         
-        .search-box {
-            position: relative;
-            margin-bottom: 2rem;
+        #map {
+            height: 400px;
+            background: #a8d5f5;
         }
         
-        #query-input {
-            width: 100%;
-            padding: 1rem 1.25rem;
-            font-family: inherit;
-            font-size: 1rem;
+        .map-legend {
             background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            color: var(--text);
-            transition: border-color 0.2s, box-shadow 0.2s;
-        }
-        
-        #query-input:focus {
-            outline: none;
-            border-color: var(--accent);
-            box-shadow: 0 0 0 3px var(--accent-dim);
-        }
-        
-        #query-input::placeholder {
-            color: var(--text-muted);
-        }
-        
-        .examples {
-            font-family: 'IBM Plex Mono', monospace;
-            font-size: 0.75rem;
-            color: var(--text-muted);
-            margin-top: 0.75rem;
-        }
-        
-        .examples span {
-            cursor: pointer;
-            padding: 0.25rem 0.5rem;
-            background: var(--surface);
-            border-radius: 4px;
-            margin-right: 0.5rem;
-            transition: color 0.2s;
-        }
-        
-        .examples span:hover {
-            color: var(--accent);
-        }
-        
-        #loading {
-            display: none;
-            padding: 2rem;
-        }
-        
-        #loading.active {
-            display: block;
-        }
-        
-        .loading-container {
-            max-width: 400px;
-            margin: 0 auto;
-        }
-        
-        .loading-status {
-            font-family: 'IBM Plex Mono', monospace;
-            font-size: 0.85rem;
-            color: var(--text);
-            margin-bottom: 1rem;
+            padding: 1rem 1.5rem;
+            border-top: 1px solid var(--border);
             display: flex;
             align-items: center;
-            gap: 0.75rem;
-        }
-        
-        .loading-icon {
-            width: 20px;
-            height: 20px;
-            position: relative;
-        }
-        
-        .loading-icon::before,
-        .loading-icon::after {
-            content: '';
-            position: absolute;
-            width: 8px;
-            height: 10px;
-            border: 1.5px solid var(--accent);
-            border-radius: 1px;
-        }
-        
-        .loading-icon::before {
-            top: 0;
-            left: 0;
-            animation: docShuffle 0.6s ease-in-out infinite;
-        }
-        
-        .loading-icon::after {
-            top: 4px;
-            left: 6px;
-            opacity: 0.5;
-            animation: docShuffle 0.6s ease-in-out infinite 0.15s;
-        }
-        
-        @keyframes docShuffle {
-            0%, 100% { transform: translateY(0); }
-            50% { transform: translateY(-3px); }
-        }
-        
-        .progress-track {
-            height: 4px;
-            background: var(--surface);
-            border-radius: 2px;
-            overflow: hidden;
-            margin-bottom: 0.75rem;
-        }
-        
-        .progress-bar {
-            height: 100%;
-            background: linear-gradient(90deg, var(--accent), #60a5fa);
-            border-radius: 2px;
-            width: 0%;
-            transition: width 0.4s ease-out;
-        }
-        
-        .progress-stages {
-            display: flex;
-            justify-content: space-between;
-            font-family: 'IBM Plex Mono', monospace;
-            font-size: 0.65rem;
-            color: var(--text-muted);
-        }
-        
-        .progress-stages span {
-            opacity: 0.4;
-            transition: opacity 0.3s, color 0.3s;
-        }
-        
-        .progress-stages span.active {
-            opacity: 1;
-            color: var(--accent);
-        }
-        
-        .progress-stages span.done {
-            opacity: 0.7;
-            color: var(--text);
-        }
-        
-        #results {
-            display: none;
-        }
-        
-        #results.active {
-            display: block;
-        }
-        
-        .meta-info {
-            font-family: 'IBM Plex Mono', monospace;
-            font-size: 0.75rem;
-            color: var(--text-muted);
-            padding: 1rem;
-            background: var(--surface);
-            border-radius: 6px;
-            margin-bottom: 1.5rem;
-            border-left: 3px solid var(--accent);
-        }
-        
-        .answer {
-            padding: 1.5rem 0;
-            border-bottom: 1px solid var(--border);
-        }
-        
-        .answer h2, .answer h3 {
-            font-size: 1.1rem;
-            margin: 1.5rem 0 0.75rem;
-            font-weight: 600;
-        }
-        
-        .answer h2:first-child, .answer h3:first-child {
-            margin-top: 0;
-        }
-        
-        .answer p {
-            margin-bottom: 1rem;
-        }
-        
-        .answer ul, .answer ol {
-            margin: 1rem 0;
-            padding-left: 1.5rem;
-        }
-        
-        .answer li {
-            margin-bottom: 0.5rem;
-        }
-        
-        .answer strong {
-            color: #fff;
-        }
-        
-        .answer code {
-            font-family: 'IBM Plex Mono', monospace;
-            font-size: 0.85em;
-            background: var(--surface);
-            padding: 0.15rem 0.4rem;
-            border-radius: 3px;
-        }
-        
-        .sources {
-            padding: 1.5rem 0;
-        }
-        
-        .sources h4 {
-            font-family: 'IBM Plex Mono', monospace;
-            font-size: 0.7rem;
-            text-transform: uppercase;
-            letter-spacing: 0.1em;
-            color: var(--text-muted);
-            margin-bottom: 1rem;
-        }
-        
-        .source-list {
-            display: flex;
+            gap: 1.5rem;
             flex-wrap: wrap;
+        }
+        
+        .legend-title {
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: var(--text-muted);
+        }
+        
+        .legend-scale {
+            display: flex;
             gap: 0.5rem;
         }
         
-        .source-tag {
-            font-family: 'IBM Plex Mono', monospace;
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 0.35rem;
             font-size: 0.7rem;
-            padding: 0.35rem 0.6rem;
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: 4px;
             color: var(--text-muted);
         }
         
+        .legend-color {
+            width: 16px;
+            height: 12px;
+            border-radius: 2px;
+        }
+        
+        /* Stats Bar */
+        .stats-bar {
+            display: flex;
+            justify-content: center;
+            gap: 3rem;
+            padding: 2rem 0;
+            border-top: 1px solid var(--border);
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 3rem;
+        }
+        
+        .stat { text-align: center; }
+        .stat-value { font-size: 1.75rem; font-weight: 700; color: var(--text); }
+        .stat-label {
+            font-size: 0.75rem;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-top: 0.25rem;
+        }
+        
+        /* Loading */
+        #loading { display: none; padding: 3rem 0; }
+        #loading.active { display: block; }
+        
+        .loading-container { max-width: 500px; margin: 0 auto; text-align: center; }
+        
+        .loading-spinner {
+            width: 48px;
+            height: 48px;
+            border: 3px solid var(--border);
+            border-top-color: var(--gold);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin: 0 auto 1.5rem;
+        }
+        
+        @keyframes spin { to { transform: rotate(360deg); } }
+        
+        .loading-text { color: var(--text-muted); font-size: 0.9rem; }
+        
+        .loading-steps {
+            display: flex;
+            justify-content: center;
+            gap: 2rem;
+            margin-top: 1.5rem;
+        }
+        
+        .loading-step {
+            font-size: 0.75rem;
+            color: var(--text-dim);
+            opacity: 0.5;
+            transition: all 0.3s;
+        }
+        
+        .loading-step.active { opacity: 1; color: var(--gold); }
+        .loading-step.done { opacity: 0.8; color: var(--green); }
+        
+        /* Results */
+        #results { display: none; }
+        #results.active { display: block; }
+        
+        .result-header {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            padding: 1rem 1.25rem;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            margin-bottom: 1.5rem;
+            font-size: 0.8rem;
+            color: var(--text-muted);
+        }
+        
+        .result-header code {
+            background: var(--bg);
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+        }
+        
+        .answer-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 2rem;
+            margin-bottom: 1.5rem;
+        }
+        
+        .answer-card h2, .answer-card h3 { font-size: 1.1rem; margin: 1.5rem 0 0.75rem; font-weight: 600; }
+        .answer-card h2:first-child, .answer-card h3:first-child { margin-top: 0; }
+        .answer-card p { margin-bottom: 1rem; color: var(--text); }
+        .answer-card ul, .answer-card ol { margin: 1rem 0; padding-left: 1.5rem; }
+        .answer-card li { margin-bottom: 0.5rem; }
+        .answer-card strong { color: #fff; font-weight: 600; }
+        .answer-card code {
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 0.85em;
+            background: var(--bg);
+            padding: 0.2rem 0.4rem;
+            border-radius: 4px;
+        }
+        
+        .sources-section {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 1.25rem;
+        }
+        
+        .sources-title {
+            font-size: 0.7rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--text-dim);
+            margin-bottom: 0.75rem;
+        }
+        
+        .sources-list { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+        
+        .source-tag {
+            font-size: 0.75rem;
+            padding: 0.4rem 0.75rem;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text-muted);
+        }
+        
+        /* Features */
+        .features-section {
+            margin-top: 4rem;
+            padding-top: 3rem;
+            border-top: 1px solid var(--border);
+        }
+        
+        .section-header { text-align: center; margin-bottom: 3rem; }
+        .section-header h2 { font-size: 1.5rem; font-weight: 700; margin-bottom: 0.5rem; }
+        .section-header p { color: var(--text-muted); }
+        
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 3rem;
+        }
+        
+        .feature-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 1.5rem;
+        }
+        
+        .feature-icon {
+            width: 40px;
+            height: 40px;
+            background: var(--gold-dim);
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.25rem;
+            margin-bottom: 1rem;
+        }
+        
+        .feature-card h3 { font-size: 1rem; font-weight: 600; margin-bottom: 0.5rem; }
+        .feature-card p { font-size: 0.875rem; color: var(--text-muted); line-height: 1.6; }
+        
+        .comparison-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 3rem;
+            font-size: 0.875rem;
+        }
+        
+        .comparison-table th {
+            text-align: left;
+            padding: 1rem;
+            background: var(--surface);
+            border-bottom: 1px solid var(--border);
+            font-weight: 600;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-muted);
+        }
+        
+        .comparison-table td { padding: 1rem; border-bottom: 1px solid var(--border); }
+        .comparison-table td:first-child { color: var(--text-muted); }
+        .check { color: var(--green); }
+        .cross { color: var(--red); opacity: 0.8; }
+        
+        /* Footer */
+        footer {
+            margin-top: 4rem;
+            padding: 2rem 0;
+            border-top: 1px solid var(--border);
+            text-align: center;
+        }
+        
+        .footer-links { display: flex; justify-content: center; gap: 2rem; margin-bottom: 1rem; }
+        .footer-links a {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            text-decoration: none;
+            transition: color 0.2s;
+        }
+        .footer-links a:hover { color: var(--gold); }
+        .footer-credit { font-size: 0.75rem; color: var(--text-dim); }
+        
+        /* Leaflet customization */
+        .leaflet-container { background: #a8d5f5; }
+        .leaflet-control-zoom { border: 1px solid var(--border) !important; }
+        .leaflet-control-zoom a {
+            background: var(--surface) !important;
+            color: var(--text) !important;
+            border-bottom: 1px solid var(--border) !important;
+        }
+        .leaflet-control-zoom a:hover { background: var(--bg-secondary) !important; }
+        
+        .country-tooltip {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 0.5rem 0.75rem;
+            font-family: 'Inter', sans-serif;
+            font-size: 0.8rem;
+            color: var(--text);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
+        
+        .country-tooltip strong { color: var(--gold); }
+        
         @media (max-width: 640px) {
-            .container {
-                padding: 1rem;
-            }
-            header {
-                padding: 2rem 0;
-            }
-            .examples span {
-                display: block;
-                margin: 0.5rem 0;
-            }
+            .container { padding: 1rem; }
+            .hero { padding: 2rem 0; }
+            .hero h1 { font-size: 2rem; }
+            .stats-bar { gap: 1.5rem; flex-wrap: wrap; }
+            .stat-value { font-size: 1.25rem; }
+            .search-btn span { display: none; }
+            #map { height: 300px; }
+            .legend-scale { flex-wrap: wrap; }
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <header>
-            <h1>National Security Strategy Search</h1>
-            <p class="subtitle">RAG-powered document analysis</p>
-        </header>
-        
-        <div class="search-box">
-            <input 
-                type="text" 
-                id="query-input" 
-                placeholder="Ask about national security strategies..."
-                autocomplete="off"
-            >
+        <section class="hero">
+            <div class="badge">RAG-Powered Analysis</div>
+            <h1>
+                National Security
+                <span>Strategy Intelligence</span>
+            </h1>
+            <p class="hero-subtitle">
+                Query national security documents using advanced 
+                retrieval-augmented generation for precise, sourced intelligence.
+            </p>
+            
+            <div class="search-container">
+                <div class="search-box">
+                    <div class="search-icon">
+                        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+                        </svg>
+                    </div>
+                    <input type="text" id="query-input" placeholder="Query national security strategy documents..." autocomplete="off">
+                    <button class="search-btn" onclick="submitQuery()">
+                        <span>Search</span>
+                        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"/>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+            
             <div class="examples">
-                Try: 
-                <span onclick="setQuery('What is the latest US NSS about?')">Latest US strategy</span>
-                <span onclick="setQuery('How does Japan view China as a threat?')">Japan on China</span>
-                <span onclick="setQuery('Compare cyber security approaches across countries')">Cyber comparison</span>
+                <button class="example-btn" onclick="setQuery('What is the latest US NSS about?')">Latest US Strategy</button>
+                <button class="example-btn" onclick="setQuery('How does Japan view China as a threat?')">Japan on China</button>
+                <button class="example-btn" onclick="setQuery('Compare cyber security approaches across countries')">Cyber Comparison</button>
+                <button class="example-btn" onclick="setQuery('Evolution of NATO in European strategies')">NATO Evolution</button>
+            </div>
+        </section>
+        
+        <!-- World Map -->
+        <section class="map-section">
+            <div class="map-header">
+                <h2>Global Document Coverage</h2>
+                <p>820 National Security Strategy documents spanning 112 countries from 1962 to 2025</p>
+            </div>
+            <div id="map"></div>
+            <div class="map-legend">
+                <span class="legend-title">Number of Documents</span>
+                <div class="legend-scale">
+                    <div class="legend-item"><div class="legend-color" style="background: #e8e0f0;"></div>0–1</div>
+                    <div class="legend-item"><div class="legend-color" style="background: #d4c4e8;"></div>1–5</div>
+                    <div class="legend-item"><div class="legend-color" style="background: #b9a3d4;"></div>5–10</div>
+                    <div class="legend-item"><div class="legend-color" style="background: #9d7fc0;"></div>10–15</div>
+                    <div class="legend-item"><div class="legend-color" style="background: #7c5aa8;"></div>15–20</div>
+                    <div class="legend-item"><div class="legend-color" style="background: #5c3d8a;"></div>20–25</div>
+                    <div class="legend-item"><div class="legend-color" style="background: #4a2c72;"></div>25–30</div>
+                </div>
+            </div>
+        </section>
+        
+        <div class="stats-bar">
+            <div class="stat">
+                <div class="stat-value" id="stat-chunks">70,000+</div>
+                <div class="stat-label">Document Chunks</div>
+            </div>
+            <div class="stat">
+                <div class="stat-value" id="stat-countries">20+</div>
+                <div class="stat-label">Countries</div>
+            </div>
+            <div class="stat">
+                <div class="stat-value" id="stat-years">1982–2025</div>
+                <div class="stat-label">Year Range</div>
             </div>
         </div>
         
         <div id="loading">
             <div class="loading-container">
-                <div class="loading-status">
-                    <div class="loading-icon"></div>
-                    <span id="loading-text">Understanding query...</span>
-                </div>
-                <div class="progress-track">
-                    <div class="progress-bar" id="progress-bar"></div>
-                </div>
-                <div class="progress-stages">
-                    <span id="stage-0" class="active">Parse</span>
-                    <span id="stage-1">Search</span>
-                    <span id="stage-2">Retrieve</span>
-                    <span id="stage-3">Analyze</span>
+                <div class="loading-spinner"></div>
+                <div class="loading-text" id="loading-text">Understanding your query...</div>
+                <div class="loading-steps">
+                    <span class="loading-step active" id="step-0">Parse</span>
+                    <span class="loading-step" id="step-1">Search</span>
+                    <span class="loading-step" id="step-2">Retrieve</span>
+                    <span class="loading-step" id="step-3">Generate</span>
                 </div>
             </div>
         </div>
         
         <div id="results">
-            <div class="meta-info" id="meta-info"></div>
-            <div class="answer" id="answer"></div>
-            <div class="sources">
-                <h4>Sources</h4>
-                <div class="source-list" id="sources"></div>
+            <div class="result-header">
+                <span>Query understood as:</span>
+                <code id="parsed-query"></code>
+                <span id="filters-display"></span>
+            </div>
+            <div class="answer-card" id="answer"></div>
+            <div class="sources-section">
+                <div class="sources-title">Sources Referenced</div>
+                <div class="sources-list" id="sources"></div>
             </div>
         </div>
+        
+        <section class="features-section">
+            <div class="section-header">
+                <h2>Why RAG Over Standard LLMs?</h2>
+                <p>Grounded answers from real documents, not hallucinations.</p>
+            </div>
+            
+            <div class="features-grid">
+                <div class="feature-card">
+                    <div class="feature-icon">🎯</div>
+                    <h3>Source-Grounded</h3>
+                    <p>Every claim links to specific documents and page numbers. Verify anything instantly.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🔍</div>
+                    <h3>Semantic Search</h3>
+                    <p>Finds conceptually relevant passages, not just keyword matches. Understands context and intent.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🧠</div>
+                    <h3>Smart Filtering</h3>
+                    <p>Automatically extracts country, year, and intent from natural language queries.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">📊</div>
+                    <h3>Cross-Document Analysis</h3>
+                    <p>Compare strategies across countries and time periods with multi-document synthesis.</p>
+                </div>
+            </div>
+            
+            <table class="comparison-table">
+                <thead>
+                    <tr>
+                        <th>Capability</th>
+                        <th>This System</th>
+                        <th>ChatGPT/Claude</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Page-level citations</td>
+                        <td><span class="check">✓ Always provided</span></td>
+                        <td><span class="cross">✗ Often fabricated</span></td>
+                    </tr>
+                    <tr>
+                        <td>2025 documents</td>
+                        <td><span class="check">✓ Included</span></td>
+                        <td><span class="cross">✗ Training cutoff</span></td>
+                    </tr>
+                    <tr>
+                        <td>Verifiable claims</td>
+                        <td><span class="check">✓ Check sources</span></td>
+                        <td><span class="cross">✗ Trust required</span></td>
+                    </tr>
+                    <tr>
+                        <td>Hallucination risk</td>
+                        <td><span class="check">✓ Minimal</span></td>
+                        <td><span class="cross">✗ Significant</span></td>
+                    </tr>
+                </tbody>
+            </table>
+        </section>
+        
+        <footer>
+            <div class="footer-links">
+                <a href="https://github.com/KasperBuilds/NationalSecurityRAG" target="_blank">GitHub</a>
+                <a href="/api/stats" target="_blank">API</a>
+            </div>
+            <p class="footer-credit">Built with ChromaDB, OpenAI, and Claude · Kasper Hong</p>
+        </footer>
     </div>
     
     <script>
+        // Country name mapping for GeoJSON
+        const countryNameMap = {
+            "United States of America": "United States",
+            "United States": "United States",
+            "USA": "United States",
+            "Russia": "Russia",
+            "Russian Federation": "Russia",
+            "United Kingdom": "United Kingdom",
+            "UK": "United Kingdom",
+            "Republic of Korea": "South Korea",
+            "Korea": "South Korea",
+            "Taiwan": "Taiwan",
+            "People's Republic of China": "China",
+            "Japan": "Japan",
+            "Czech Republic": "Czech Republic",
+            "Czechia": "Czech Republic"
+        };
+        
+        // Document counts per country (from the source data)
+        const docCounts = {
+            "Albania": 11, "Argentina": 4, "Armenia": 2, "Aruba": 1, "Australia": 13,
+            "Austria": 10, "Azerbaijan": 1, "Belarus": 2, "Belgium": 5, "Belize": 2,
+            "Bermuda": 1, "Bolivia": 3, "Bosnia": 3, "Brazil": 8, "Brunei": 3,
+            "Bulgaria": 8, "Burkina Faso": 1, "Cambodia": 4, "Canada": 5,
+            "Central African Republic": 2, "Chile": 4, "China": 11, "Colombia": 6,
+            "Cook Islands": 1, "Costa Rica": 2, "Croatia": 7, "Czech Republic": 16,
+            "Denmark": 11, "Dominican Republic": 1, "Ecuador": 7, "El Salvador": 2,
+            "Estonia": 10, "Ethiopia": 2, "Finland": 10, "France": 7, "Gambia": 1,
+            "Georgia": 8, "Germany": 9, "Greece": 4, "Guatemala": 7, "Guyana": 1,
+            "Haiti": 1, "Honduras": 1, "Hungary": 7, "Iceland": 1, "India": 17,
+            "Indonesia": 2, "Iraq": 1, "Ireland": 8, "Israel": 1, "Italy": 8,
+            "Jamaica": 3, "Japan": 21, "Kenya": 1, "Kyrgyzstan": 1, "Latvia": 12,
+            "Lebanon": 1, "Liberia": 2, "Lithuania": 13, "Luxembourg": 5, "Malaysia": 2,
+            "Maldives": 1, "Malta": 2, "Mexico": 5, "Moldova": 3, "Mongolia": 3,
+            "Montenegro": 4, "Nepal": 1, "Netherlands": 8, "New Zealand": 11,
+            "Nicaragua": 1, "Niger": 1, "Nigeria": 1, "North Macedonia": 4, "Norway": 12,
+            "Pakistan": 3, "Palau": 1, "Papua New Guinea": 1, "Paraguay": 1, "Peru": 2,
+            "Philippines": 4, "Poland": 9, "Portugal": 4, "Romania": 9, "Russia": 11,
+            "Rwanda": 1, "Samoa": 1, "Serbia": 4, "Sierra Leone": 1, "Singapore": 2,
+            "Slovakia": 7, "Slovenia": 13, "Solomon Islands": 1, "South Africa": 6,
+            "South Korea": 12, "Spain": 10, "Sweden": 5, "Switzerland": 5, "Taiwan": 23,
+            "Tanzania": 1, "Thailand": 2, "Timor-Leste": 1, "Trinidad and Tobago": 1,
+            "Turkey": 3, "Uganda": 1, "Ukraine": 13, "United Kingdom": 18, "Uruguay": 4,
+            "United States": 21, "Vanuatu": 1, "Vietnam": 2
+        };
+        
+        function getColor(count) {
+            if (count >= 25) return '#4a2c72';
+            if (count >= 20) return '#5c3d8a';
+            if (count >= 15) return '#7c5aa8';
+            if (count >= 10) return '#9d7fc0';
+            if (count >= 5) return '#b9a3d4';
+            if (count >= 1) return '#d4c4e8';
+            return '#e8e0f0';
+        }
+        
+        function getCountryCount(name) {
+            // Try direct match
+            if (docCounts[name]) return docCounts[name];
+            // Try mapped name
+            const mapped = countryNameMap[name];
+            if (mapped && docCounts[mapped]) return docCounts[mapped];
+            return 0;
+        }
+        
+        // Initialize map
+        const map = L.map('map', {
+            center: [30, 0],
+            zoom: 2,
+            minZoom: 1,
+            maxZoom: 6,
+            zoomControl: true
+        });
+        
+        // Add ocean background
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png', {
+            attribution: ''
+        }).addTo(map);
+        
+        // Load GeoJSON and add choropleth
+        fetch('https://raw.githubusercontent.com/datasets/geo-countries/master/data/countries.geojson')
+            .then(res => res.json())
+            .then(data => {
+                L.geoJSON(data, {
+                    style: function(feature) {
+                        const name = feature.properties.ADMIN || feature.properties.name;
+                        const count = getCountryCount(name);
+                        return {
+                            fillColor: getColor(count),
+                            weight: 0.5,
+                            opacity: 1,
+                            color: '#fff',
+                            fillOpacity: 0.85
+                        };
+                    },
+                    onEachFeature: function(feature, layer) {
+                        const name = feature.properties.ADMIN || feature.properties.name;
+                        const count = getCountryCount(name);
+                        if (count > 0) {
+                            layer.bindTooltip(
+                                `<strong>${name}</strong><br>${count} document${count > 1 ? 's' : ''}`,
+                                { className: 'country-tooltip', sticky: true }
+                            );
+                        }
+                        layer.on({
+                            mouseover: function(e) {
+                                e.target.setStyle({ weight: 2, color: '#d4a853' });
+                            },
+                            mouseout: function(e) {
+                                e.target.setStyle({ weight: 0.5, color: '#fff' });
+                            }
+                        });
+                    }
+                }).addTo(map);
+            });
+        
+        // Rest of the JS
         const input = document.getElementById('query-input');
         const loading = document.getElementById('loading');
         const loadingText = document.getElementById('loading-text');
-        const progressBar = document.getElementById('progress-bar');
         const results = document.getElementById('results');
-        const metaInfo = document.getElementById('meta-info');
         const answerDiv = document.getElementById('answer');
         const sourcesDiv = document.getElementById('sources');
+        const parsedQueryEl = document.getElementById('parsed-query');
+        const filtersDisplay = document.getElementById('filters-display');
         
-        const stages = [
-            { text: 'Understanding query...', progress: 15 },
-            { text: 'Searching documents...', progress: 35 },
-            { text: 'Retrieving chunks...', progress: 55 },
-            { text: 'Analyzing content...', progress: 75 },
-            { text: 'Generating answer...', progress: 90 }
-        ];
+        const steps = ['Parse', 'Search', 'Retrieve', 'Generate'];
+        const stepTexts = ['Understanding your query...', 'Searching documents...', 'Retrieving relevant chunks...', 'Generating answer...'];
+        let currentStep = 0;
         
-        let stageInterval = null;
-        let currentStage = 0;
+        async function loadStats() {
+            try {
+                const res = await fetch('/api/stats');
+                const data = await res.json();
+                document.getElementById('stat-chunks').textContent = data.total_chunks.toLocaleString();
+                document.getElementById('stat-countries').textContent = data.countries;
+                if (data.year_range) {
+                    document.getElementById('stat-years').textContent = data.year_range[0] + '–' + data.year_range[1];
+                }
+            } catch (e) {}
+        }
+        loadStats();
         
-        function resetProgress() {
-            currentStage = 0;
-            progressBar.style.width = '0%';
+        function resetSteps() {
+            currentStep = 0;
             for (let i = 0; i < 4; i++) {
-                const el = document.getElementById(`stage-${i}`);
-                el.classList.remove('active', 'done');
+                document.getElementById('step-' + i).className = 'loading-step';
             }
-            document.getElementById('stage-0').classList.add('active');
-            loadingText.textContent = stages[0].text;
+            document.getElementById('step-0').classList.add('active');
+            loadingText.textContent = stepTexts[0];
         }
         
-        function advanceStage() {
-            if (currentStage >= stages.length - 1) return;
-            
-            // Mark current as done
-            if (currentStage < 4) {
-                document.getElementById(`stage-${currentStage}`).classList.remove('active');
-                document.getElementById(`stage-${currentStage}`).classList.add('done');
-            }
-            
-            currentStage++;
-            const stage = stages[currentStage];
-            
-            // Update progress bar
-            progressBar.style.width = stage.progress + '%';
-            loadingText.textContent = stage.text;
-            
-            // Mark new stage as active
-            if (currentStage < 4) {
-                document.getElementById(`stage-${currentStage}`).classList.add('active');
-            }
-        }
-        
-        function startProgress() {
-            resetProgress();
-            progressBar.style.width = stages[0].progress + '%';
-            
-            // Advance through stages with varying delays
-            const delays = [800, 600, 700, 1500]; // Time for each stage
-            let totalDelay = 0;
-            
-            delays.forEach((delay, i) => {
-                totalDelay += delay;
-                setTimeout(() => advanceStage(), totalDelay);
-            });
-        }
-        
-        function completeProgress() {
-            if (stageInterval) clearInterval(stageInterval);
-            progressBar.style.width = '100%';
-            
-            // Mark all as done
-            for (let i = 0; i < 4; i++) {
-                const el = document.getElementById(`stage-${i}`);
-                el.classList.remove('active');
-                el.classList.add('done');
-            }
+        function advanceStep() {
+            if (currentStep >= 3) return;
+            document.getElementById('step-' + currentStep).classList.remove('active');
+            document.getElementById('step-' + currentStep).classList.add('done');
+            currentStep++;
+            document.getElementById('step-' + currentStep).classList.add('active');
+            loadingText.textContent = stepTexts[currentStep];
         }
         
         function setQuery(q) {
             input.value = q;
-            input.focus();
             submitQuery();
         }
         
         input.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') {
-                submitQuery();
-            }
+            if (e.key === 'Enter') submitQuery();
         });
         
         async function submitQuery() {
             const query = input.value.trim();
             if (!query) return;
             
-            // Show loading with animation
             loading.classList.add('active');
             results.classList.remove('active');
-            startProgress();
+            resetSteps();
+            
+            const delays = [600, 500, 600];
+            delays.forEach((d, i) => setTimeout(advanceStep, delays.slice(0, i+1).reduce((a,b) => a+b, 0)));
             
             try {
                 const response = await fetch('/api/query', {
@@ -771,41 +1137,37 @@ async def root():
                     body: JSON.stringify({ query })
                 });
                 
-                if (!response.ok) {
-                    throw new Error('Query failed');
-                }
+                if (!response.ok) throw new Error('Query failed');
                 
                 const data = await response.json();
                 
-                // Complete progress animation
-                completeProgress();
-                
-                // Small delay to show completion
-                await new Promise(r => setTimeout(r, 300));
-                
-                // Display meta info
-                let meta = `Search: "${data.parsed_query.search_query || query}"`;
-                if (Object.keys(data.filters).length > 0) {
-                    meta += ` | Filters: ${JSON.stringify(data.filters)}`;
+                for (let i = 0; i < 4; i++) {
+                    document.getElementById('step-' + i).className = 'loading-step done';
                 }
-                metaInfo.textContent = meta;
                 
-                // Display answer (render markdown)
+                await new Promise(r => setTimeout(r, 200));
+                
+                parsedQueryEl.textContent = data.parsed_query.search_query || query;
+                if (Object.keys(data.filters).length > 0) {
+                    filtersDisplay.textContent = '| Filters: ' + JSON.stringify(data.filters);
+                } else {
+                    filtersDisplay.textContent = '';
+                }
+                
                 answerDiv.innerHTML = marked.parse(data.answer);
                 
-                // Display sources
                 sourcesDiv.innerHTML = data.sources.map(s => 
-                    `<span class="source-tag">${s.country} (${s.year}) p.${s.page}</span>`
+                    '<span class="source-tag">' + s.country + ' (' + s.year + ') p.' + s.page + '</span>'
                 ).join('');
                 
-                // Show results
                 loading.classList.remove('active');
                 results.classList.add('active');
                 
+                window.scrollTo({ top: results.offsetTop - 20, behavior: 'smooth' });
+                
             } catch (err) {
-                completeProgress();
                 loading.classList.remove('active');
-                answerDiv.innerHTML = `<p style="color: #ef4444;">Error: ${err.message}</p>`;
+                answerDiv.innerHTML = '<p style="color: var(--red);">Error: ' + err.message + '</p>';
                 results.classList.add('active');
             }
         }
