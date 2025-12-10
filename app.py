@@ -1041,24 +1041,11 @@ async def root():
         
         @keyframes spin { to { transform: rotate(360deg); } }
         
-        .loading-text { color: var(--text-muted); font-size: 0.9rem; }
-        
-        .loading-steps {
-            display: flex;
-            justify-content: center;
-            gap: 2rem;
-            margin-top: 1.5rem;
+        .loading-text { 
+            color: var(--text-muted); 
+            font-size: 0.9rem;
+            min-height: 1.5em;
         }
-        
-        .loading-step {
-            font-size: 0.75rem;
-            color: var(--text-dim);
-            opacity: 0.5;
-            transition: all 0.3s;
-        }
-        
-        .loading-step.active { opacity: 1; color: var(--gold); }
-        .loading-step.done { opacity: 0.8; color: var(--green); }
         
         /* Results */
         #results { display: none; padding: 2rem 0; }
@@ -1414,13 +1401,7 @@ async def root():
         <div id="loading">
             <div class="loading-container">
                 <div class="loading-spinner"></div>
-                <div class="loading-text" id="loading-text">Understanding your query...</div>
-                <div class="loading-steps">
-                    <span class="loading-step active" id="step-0">Parse</span>
-                    <span class="loading-step" id="step-1">Search</span>
-                    <span class="loading-step" id="step-2">Retrieve</span>
-                    <span class="loading-step" id="step-3">Generate</span>
-                </div>
+                <div class="loading-text" id="loading-text"></div>
             </div>
         </div>
         
@@ -1457,25 +1438,37 @@ async def root():
         const parsedQueryEl = document.getElementById('parsed-query');
         const filtersDisplay = document.getElementById('filters-display');
         
-        const stepTexts = ['Understanding query...', 'Searching documents...', 'Retrieving chunks...', 'Generating answer...'];
-        let currentStep = 0;
+        const actionVerbs = [
+            'Analyzing',
+            'Searching',
+            'Processing',
+            'Retrieving',
+            'Examining',
+            'Evaluating',
+            'Synthesizing',
+            'Compiling',
+            'Reviewing',
+            'Organizing'
+        ];
         
-        function resetSteps() {
-            currentStep = 0;
-            for (let i = 0; i < 4; i++) {
-                document.getElementById('step-' + i).className = 'loading-step';
-            }
-            document.getElementById('step-0').classList.add('active');
-            loadingText.textContent = stepTexts[0];
+        let verbInterval = null;
+        let verbIndex = 0;
+        
+        function startVerbCycle() {
+            verbIndex = 0;
+            loadingText.textContent = actionVerbs[verbIndex] + '...';
+            
+            verbInterval = setInterval(() => {
+                verbIndex = (verbIndex + 1) % actionVerbs.length;
+                loadingText.textContent = actionVerbs[verbIndex] + '...';
+            }, 4000);
         }
         
-        function advanceStep() {
-            if (currentStep >= 3) return;
-            document.getElementById('step-' + currentStep).classList.remove('active');
-            document.getElementById('step-' + currentStep).classList.add('done');
-            currentStep++;
-            document.getElementById('step-' + currentStep).classList.add('active');
-            loadingText.textContent = stepTexts[currentStep];
+        function stopVerbCycle() {
+            if (verbInterval) {
+                clearInterval(verbInterval);
+                verbInterval = null;
+            }
         }
         
         function setQuery(q) {
@@ -1493,10 +1486,12 @@ async def root():
             
             loading.classList.add('active');
             results.classList.remove('active');
-            resetSteps();
+            startVerbCycle();
             
-            const delays = [600, 500, 600];
-            delays.forEach((d, i) => setTimeout(advanceStep, delays.slice(0, i+1).reduce((a,b) => a+b, 0)));
+            // Scroll to loading area immediately
+            setTimeout(() => {
+                window.scrollTo({ top: loading.offsetTop - 100, behavior: 'smooth' });
+            }, 100);
             
             try {
                 const response = await fetch('/api/query', {
@@ -1509,10 +1504,7 @@ async def root():
                 
                 const data = await response.json();
                 
-                for (let i = 0; i < 4; i++) {
-                    document.getElementById('step-' + i).className = 'loading-step done';
-                }
-                
+                stopVerbCycle();
                 await new Promise(r => setTimeout(r, 200));
                 
                 parsedQueryEl.textContent = data.parsed_query.search_query || query;
@@ -1531,6 +1523,7 @@ async def root():
                 window.scrollTo({ top: results.offsetTop - 100, behavior: 'smooth' });
                 
             } catch (err) {
+                stopVerbCycle();
                 loading.classList.remove('active');
                 answerDiv.innerHTML = '<p style="color: var(--red);">Error: ' + err.message + '</p>';
                 results.classList.add('active');
