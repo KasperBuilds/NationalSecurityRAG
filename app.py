@@ -267,34 +267,548 @@ async def get_stats():
     
     countries = {}
     years = set()
-    docs_per_country = {}
     
     for meta in all_meta["metadatas"]:
         country = meta.get("country", "Unknown")
         year = meta.get("year")
-        doc_name = meta.get("doc_name", "")
         
         if country not in countries:
             countries[country] = set()
-        if country not in docs_per_country:
-            docs_per_country[country] = set()
-        
-        docs_per_country[country].add(doc_name)
-        
         if year:
             countries[country].add(year)
             years.add(year)
-    
-    # Convert sets to counts
-    doc_counts = {k: len(v) for k, v in docs_per_country.items()}
     
     return {
         "total_chunks": collection.count(),
         "countries": len(countries),
         "country_list": sorted(countries.keys()),
-        "year_range": [min(years), max(years)] if years else None,
-        "docs_per_country": doc_counts
+        "year_range": [min(years), max(years)] if years else None
     }
+
+@app.get("/about", response_class=HTMLResponse)
+async def about_page():
+    return """<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>About - National Security Strategy Intelligence</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        :root {
+            --bg: #0d1117;
+            --bg-secondary: #161b22;
+            --surface: #1c2128;
+            --border: #30363d;
+            --text: #e6edf3;
+            --text-muted: #8b949e;
+            --text-dim: #6e7681;
+            --gold: #d4a853;
+            --gold-dark: #b8923f;
+            --gold-dim: rgba(212, 168, 83, 0.15);
+            --green: #3fb950;
+            --red: #f85149;
+        }
+        
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            line-height: 1.6;
+        }
+        
+        /* Navigation */
+        nav {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            background: rgba(13, 17, 23, 0.9);
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid var(--border);
+            z-index: 100;
+            padding: 1rem 2rem;
+        }
+        
+        .nav-content {
+            max-width: 1000px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .nav-logo {
+            font-weight: 700;
+            font-size: 1rem;
+            color: var(--text);
+            text-decoration: none;
+        }
+        
+        .nav-logo span { color: var(--gold); }
+        
+        .nav-links {
+            display: flex;
+            gap: 2rem;
+        }
+        
+        .nav-links a {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            text-decoration: none;
+            transition: color 0.2s;
+        }
+        
+        .nav-links a:hover { color: var(--gold); }
+        .nav-links a.active { color: var(--gold); }
+        
+        .container { max-width: 1000px; margin: 0 auto; padding: 2rem; }
+        
+        /* About Section */
+        #about {
+            padding: 6rem 0 4rem;
+        }
+        
+        .about-header {
+            text-align: center;
+            margin-bottom: 4rem;
+        }
+        
+        .about-header h2 {
+            font-size: 2rem;
+            font-weight: 700;
+            margin-bottom: 1rem;
+        }
+        
+        .about-header p {
+            color: var(--text-muted);
+            max-width: 600px;
+            margin: 0 auto;
+        }
+        
+        /* Map Section */
+        .map-section {
+            margin-bottom: 4rem;
+            border-radius: 12px;
+            overflow: hidden;
+            border: 1px solid var(--border);
+        }
+        
+        .map-header {
+            background: var(--surface);
+            padding: 1.25rem 1.5rem;
+            border-bottom: 1px solid var(--border);
+        }
+        
+        .map-header h3 {
+            font-size: 1.1rem;
+            font-weight: 600;
+            margin-bottom: 0.25rem;
+        }
+        
+        .map-header p {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+        }
+        
+        #map {
+            height: 400px;
+            background: #a8d5f5;
+        }
+        
+        .map-legend {
+            background: var(--surface);
+            padding: 1rem 1.5rem;
+            border-top: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 1.5rem;
+            flex-wrap: wrap;
+        }
+        
+        .legend-title {
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: var(--text-muted);
+        }
+        
+        .legend-scale { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+        
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 0.35rem;
+            font-size: 0.7rem;
+            color: var(--text-muted);
+        }
+        
+        .legend-color {
+            width: 16px;
+            height: 12px;
+            border-radius: 2px;
+        }
+        
+        /* Data Source */
+        .data-source {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 4rem;
+            text-align: center;
+        }
+        
+        .data-source p {
+            font-size: 0.9rem;
+            color: var(--text-muted);
+            margin-bottom: 0.5rem;
+        }
+        
+        .data-source a {
+            color: var(--gold);
+            text-decoration: none;
+            font-weight: 500;
+        }
+        
+        .data-source a:hover { text-decoration: underline; }
+        
+        .data-source .attribution {
+            font-size: 0.8rem;
+            color: var(--text-dim);
+            margin-top: 0.75rem;
+        }
+        
+        /* Comparison Section */
+        .comparison-section { margin-bottom: 4rem; }
+        
+        .comparison-section h3 {
+            font-size: 1.25rem;
+            font-weight: 600;
+            margin-bottom: 1.5rem;
+            text-align: center;
+        }
+        
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1.25rem;
+            margin-bottom: 2.5rem;
+        }
+        
+        .feature-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 1.5rem;
+        }
+        
+        .feature-icon {
+            width: 40px;
+            height: 40px;
+            background: var(--gold-dim);
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.25rem;
+            margin-bottom: 1rem;
+        }
+        
+        .feature-card h4 { font-size: 0.95rem; font-weight: 600; margin-bottom: 0.5rem; }
+        .feature-card p { font-size: 0.85rem; color: var(--text-muted); line-height: 1.6; }
+        
+        .comparison-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.875rem;
+        }
+        
+        .comparison-table th {
+            text-align: left;
+            padding: 1rem;
+            background: var(--surface);
+            border-bottom: 1px solid var(--border);
+            font-weight: 600;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-muted);
+        }
+        
+        .comparison-table td { padding: 1rem; border-bottom: 1px solid var(--border); }
+        .comparison-table td:first-child { color: var(--text-muted); }
+        .check { color: var(--green); }
+        .cross { color: var(--red); opacity: 0.8; }
+        
+        /* Footer */
+        footer {
+            padding: 2rem 0;
+            border-top: 1px solid var(--border);
+            text-align: center;
+        }
+        
+        .footer-links { display: flex; justify-content: center; gap: 2rem; margin-bottom: 1rem; }
+        .footer-links a {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            text-decoration: none;
+            transition: color 0.2s;
+        }
+        .footer-links a:hover { color: var(--gold); }
+        .footer-credit { font-size: 0.75rem; color: var(--text-dim); }
+        
+        /* Leaflet */
+        .leaflet-container { background: #a8d5f5; }
+        .leaflet-control-zoom { border: 1px solid var(--border) !important; }
+        .leaflet-control-zoom a {
+            background: var(--surface) !important;
+            color: var(--text) !important;
+            border-bottom: 1px solid var(--border) !important;
+        }
+        .leaflet-control-zoom a:hover { background: var(--bg-secondary) !important; }
+        
+        .country-tooltip {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 0.5rem 0.75rem;
+            font-family: 'Inter', sans-serif;
+            font-size: 0.8rem;
+            color: var(--text);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
+        
+        .country-tooltip strong { color: var(--gold); }
+        
+        @media (max-width: 640px) {
+            nav { padding: 1rem; }
+            .nav-links { gap: 1rem; }
+            .container { padding: 1rem; }
+            #map { height: 280px; }
+            .legend-scale { gap: 0.25rem; }
+        }
+    </style>
+</head>
+<body>
+    <nav>
+        <div class="nav-content">
+            <a href="/" class="nav-logo">NSS<span>Intel</span></a>
+            <div class="nav-links">
+                <a href="/about" class="active">About</a>
+                <a href="https://github.com/KasperBuilds/NationalSecurityRAG" target="_blank">GitHub</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container">
+        <section id="about">
+            <div class="about-header">
+                <h2>About This Project</h2>
+                <p>An AI-powered search engine for national security strategy documents, built with retrieval-augmented generation.</p>
+            </div>
+            
+            <!-- World Map -->
+            <div class="map-section">
+                <div class="map-header">
+                    <h3>Global Document Coverage</h3>
+                    <p>820 National Security Strategy documents spanning 112 countries from 1962 to 2025</p>
+                </div>
+                <div id="map"></div>
+                <div class="map-legend">
+                    <span class="legend-title">Documents</span>
+                    <div class="legend-scale">
+                        <div class="legend-item"><div class="legend-color" style="background: #e8e0f0;"></div>0–1</div>
+                        <div class="legend-item"><div class="legend-color" style="background: #d4c4e8;"></div>1–5</div>
+                        <div class="legend-item"><div class="legend-color" style="background: #b9a3d4;"></div>5–10</div>
+                        <div class="legend-item"><div class="legend-color" style="background: #9d7fc0;"></div>10–15</div>
+                        <div class="legend-item"><div class="legend-color" style="background: #7c5aa8;"></div>15–20</div>
+                        <div class="legend-item"><div class="legend-color" style="background: #5c3d8a;"></div>20–25</div>
+                        <div class="legend-item"><div class="legend-color" style="background: #4a2c72;"></div>25+</div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Why RAG Section -->
+            <div class="comparison-section">
+                <h3>Why RAG Over Standard LLMs?</h3>
+                
+                <div class="features-grid">
+                    <div class="feature-card">
+                        <div class="feature-icon">🎯</div>
+                        <h4>Source-Grounded</h4>
+                        <p>Every claim links to specific documents and page numbers you can verify.</p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-icon">🔍</div>
+                        <h4>Semantic Search</h4>
+                        <p>Finds conceptually relevant passages, not just keyword matches.</p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-icon">🧠</div>
+                        <h4>Smart Filtering</h4>
+                        <p>Extracts country, year, and intent from natural language queries.</p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="feature-icon">📊</div>
+                        <h4>Cross-Document</h4>
+                        <p>Compare strategies across countries and time periods.</p>
+                    </div>
+                </div>
+                
+                <table class="comparison-table">
+                    <thead>
+                        <tr>
+                            <th>Capability</th>
+                            <th>This System (RAG)</th>
+                            <th>ChatGPT / Claude</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>Page-level citations</td>
+                            <td><span class="check">✓ Always provided</span></td>
+                            <td><span class="cross">✗ Often fabricated</span></td>
+                        </tr>
+                        <tr>
+                            <td>2025 documents</td>
+                            <td><span class="check">✓ Included</span></td>
+                            <td><span class="cross">✗ Training cutoff</span></td>
+                        </tr>
+                        <tr>
+                            <td>Verifiable claims</td>
+                            <td><span class="check">✓ Check the source</span></td>
+                            <td><span class="cross">✗ Trust required</span></td>
+                        </tr>
+                        <tr>
+                            <td>Hallucination risk</td>
+                            <td><span class="check">✓ Minimal</span></td>
+                            <td><span class="cross">✗ Significant</span></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            
+            <!-- Data Source Attribution -->
+            <div class="data-source">
+                <p>Document data sourced from</p>
+                <a href="https://militarydoctrines.com/" target="_blank">militarydoctrines.com</a>
+                <p class="attribution">
+                    The Military Doctrines project is led by <strong>J Andrés Gannon</strong>, 
+                    Assistant Professor of Political Science at <strong>Vanderbilt University</strong>.
+                </p>
+            </div>
+        </section>
+        
+        <footer>
+            <div class="footer-links">
+                <a href="https://github.com/KasperBuilds/NationalSecurityRAG" target="_blank">GitHub</a>
+                <a href="https://militarydoctrines.com/" target="_blank">Data Source</a>
+            </div>
+            <p class="footer-credit">Built with ChromaDB · Kasper Hong</p>
+        </footer>
+    </div>
+    
+    <script>
+        const docCounts = {
+            "Albania": 11, "Argentina": 4, "Armenia": 2, "Aruba": 1, "Australia": 13,
+            "Austria": 10, "Azerbaijan": 1, "Belarus": 2, "Belgium": 5, "Belize": 2,
+            "Bermuda": 1, "Bolivia": 3, "Bosnia": 3, "Brazil": 8, "Brunei": 3,
+            "Bulgaria": 8, "Burkina Faso": 1, "Cambodia": 4, "Canada": 5,
+            "Central African Republic": 2, "Chile": 4, "China": 11, "Colombia": 6,
+            "Cook Islands": 1, "Costa Rica": 2, "Croatia": 7, "Czech Republic": 16,
+            "Czechia": 16, "Denmark": 11, "Dominican Republic": 1, "Ecuador": 7, 
+            "El Salvador": 2, "Estonia": 10, "Ethiopia": 2, "Finland": 10, "France": 7, 
+            "Gambia": 1, "Georgia": 8, "Germany": 9, "Greece": 4, "Guatemala": 7, 
+            "Guyana": 1, "Haiti": 1, "Honduras": 1, "Hungary": 7, "Iceland": 1, 
+            "India": 17, "Indonesia": 2, "Iraq": 1, "Ireland": 8, "Israel": 1, 
+            "Italy": 8, "Jamaica": 3, "Japan": 21, "Kenya": 1, "Kyrgyzstan": 1, 
+            "Latvia": 12, "Lebanon": 1, "Liberia": 2, "Lithuania": 13, "Luxembourg": 5, 
+            "Malaysia": 2, "Maldives": 1, "Malta": 2, "Mexico": 5, "Moldova": 3, 
+            "Mongolia": 3, "Montenegro": 4, "Nepal": 1, "Netherlands": 8, 
+            "New Zealand": 11, "Nicaragua": 1, "Niger": 1, "Nigeria": 1, 
+            "North Macedonia": 4, "Norway": 12, "Pakistan": 3, "Palau": 1, 
+            "Papua New Guinea": 1, "Paraguay": 1, "Peru": 2, "Philippines": 4, 
+            "Poland": 9, "Portugal": 4, "Romania": 9, "Russia": 11, "Rwanda": 1, 
+            "Samoa": 1, "Serbia": 4, "Sierra Leone": 1, "Singapore": 2, "Slovakia": 7, 
+            "Slovenia": 13, "Solomon Islands": 1, "South Africa": 6, "South Korea": 12,
+            "Republic of Korea": 12, "Spain": 10, "Sweden": 5, "Switzerland": 5, 
+            "Taiwan": 23, "Tanzania": 1, "Thailand": 2, "Timor-Leste": 1, 
+            "Trinidad and Tobago": 1, "Turkey": 3, "Uganda": 1, "Ukraine": 13, 
+            "United Kingdom": 18, "Uruguay": 4, "United States": 21, 
+            "United States of America": 21, "Vanuatu": 1, "Vietnam": 2
+        };
+        
+        function getColor(count) {
+            if (count >= 25) return '#4a2c72';
+            if (count >= 20) return '#5c3d8a';
+            if (count >= 15) return '#7c5aa8';
+            if (count >= 10) return '#9d7fc0';
+            if (count >= 5) return '#b9a3d4';
+            if (count >= 1) return '#d4c4e8';
+            return '#e8e0f0';
+        }
+        
+        function getCountryCount(name) {
+            return docCounts[name] || 0;
+        }
+        
+        // Initialize map immediately on about page
+        function initMap() {
+            const map = L.map('map', {
+                center: [30, 0],
+                zoom: 2,
+                minZoom: 1,
+                maxZoom: 6
+            });
+            
+            L.tileLayer('https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png', {
+                attribution: ''
+            }).addTo(map);
+            
+            fetch('https://raw.githubusercontent.com/datasets/geo-countries/master/data/countries.geojson')
+                .then(res => res.json())
+                .then(data => {
+                    L.geoJSON(data, {
+                        style: function(feature) {
+                            const name = feature.properties.ADMIN || feature.properties.name;
+                            const count = getCountryCount(name);
+                            return {
+                                fillColor: getColor(count),
+                                weight: 0.5,
+                                opacity: 1,
+                                color: '#fff',
+                                fillOpacity: 0.85
+                            };
+                        },
+                        onEachFeature: function(feature, layer) {
+                            const name = feature.properties.ADMIN || feature.properties.name;
+                            const count = getCountryCount(name);
+                            if (count > 0) {
+                                layer.bindTooltip(
+                                    '<strong>' + name + '</strong><br>' + count + ' document' + (count > 1 ? 's' : ''),
+                                    { className: 'country-tooltip', sticky: true }
+                                );
+                            }
+                            layer.on({
+                                mouseover: function(e) { e.target.setStyle({ weight: 2, color: '#d4a853' }); },
+                                mouseout: function(e) { e.target.setStyle({ weight: 0.5, color: '#fff' }); }
+                            });
+                        }
+                    }).addTo(map);
+                });
+        }
+        
+        // Initialize map when page loads
+        window.addEventListener('DOMContentLoaded', initMap);
+    </script>
+</body>
+</html>"""
 
 @app.get("/", response_class=HTMLResponse)
 async def root():
@@ -306,8 +820,6 @@ async def root():
     <title>National Security Strategy Intelligence</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <style>
         :root {
@@ -323,13 +835,6 @@ async def root():
             --gold-dim: rgba(212, 168, 83, 0.15);
             --green: #3fb950;
             --red: #f85149;
-            --purple-1: #e8e0f0;
-            --purple-2: #d4c4e8;
-            --purple-3: #b9a3d4;
-            --purple-4: #9d7fc0;
-            --purple-5: #7c5aa8;
-            --purple-6: #5c3d8a;
-            --purple-7: #4a2c72;
         }
         
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -342,10 +847,61 @@ async def root():
             line-height: 1.6;
         }
         
+        /* Navigation */
+        nav {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            background: rgba(13, 17, 23, 0.9);
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid var(--border);
+            z-index: 100;
+            padding: 1rem 2rem;
+        }
+        
+        .nav-content {
+            max-width: 1000px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .nav-logo {
+            font-weight: 700;
+            font-size: 1rem;
+            color: var(--text);
+            text-decoration: none;
+        }
+        
+        .nav-logo span { color: var(--gold); }
+        
+        .nav-links {
+            display: flex;
+            gap: 2rem;
+        }
+        
+        .nav-links a {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            text-decoration: none;
+            transition: color 0.2s;
+        }
+        
+        .nav-links a:hover { color: var(--gold); }
+        
         .container { max-width: 1000px; margin: 0 auto; padding: 2rem; }
         
         /* Hero Section */
-        .hero { text-align: center; padding: 4rem 0 3rem; }
+        .hero {
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            text-align: center;
+            padding: 6rem 0 4rem;
+        }
         
         .badge {
             display: inline-flex;
@@ -384,13 +940,17 @@ async def root():
         .hero-subtitle {
             font-size: 1.1rem;
             color: var(--text-muted);
-            max-width: 600px;
+            max-width: 550px;
             margin: 0 auto 3rem;
             line-height: 1.7;
         }
         
         /* Search Box */
-        .search-container { max-width: 700px; margin: 0 auto 2rem; }
+        .search-container {
+            width: 100%;
+            max-width: min(900px, 95%);
+            margin: 0 auto 2rem;
+        }
         
         .search-box {
             display: flex;
@@ -447,7 +1007,6 @@ async def root():
             flex-wrap: wrap;
             justify-content: center;
             gap: 0.5rem;
-            margin-bottom: 3rem;
         }
         
         .example-btn {
@@ -463,92 +1022,6 @@ async def root():
         }
         
         .example-btn:hover { border-color: var(--gold); color: var(--gold); }
-        
-        /* Map Section */
-        .map-section {
-            margin-bottom: 3rem;
-            border-radius: 12px;
-            overflow: hidden;
-            border: 1px solid var(--border);
-        }
-        
-        .map-header {
-            background: var(--surface);
-            padding: 1rem 1.5rem;
-            border-bottom: 1px solid var(--border);
-        }
-        
-        .map-header h2 {
-            font-size: 1rem;
-            font-weight: 600;
-            margin-bottom: 0.25rem;
-        }
-        
-        .map-header p {
-            font-size: 0.8rem;
-            color: var(--text-muted);
-        }
-        
-        #map {
-            height: 400px;
-            background: #a8d5f5;
-        }
-        
-        .map-legend {
-            background: var(--surface);
-            padding: 1rem 1.5rem;
-            border-top: 1px solid var(--border);
-            display: flex;
-            align-items: center;
-            gap: 1.5rem;
-            flex-wrap: wrap;
-        }
-        
-        .legend-title {
-            font-size: 0.75rem;
-            font-weight: 600;
-            color: var(--text-muted);
-        }
-        
-        .legend-scale {
-            display: flex;
-            gap: 0.5rem;
-        }
-        
-        .legend-item {
-            display: flex;
-            align-items: center;
-            gap: 0.35rem;
-            font-size: 0.7rem;
-            color: var(--text-muted);
-        }
-        
-        .legend-color {
-            width: 16px;
-            height: 12px;
-            border-radius: 2px;
-        }
-        
-        /* Stats Bar */
-        .stats-bar {
-            display: flex;
-            justify-content: center;
-            gap: 3rem;
-            padding: 2rem 0;
-            border-top: 1px solid var(--border);
-            border-bottom: 1px solid var(--border);
-            margin-bottom: 3rem;
-        }
-        
-        .stat { text-align: center; }
-        .stat-value { font-size: 1.75rem; font-weight: 700; color: var(--text); }
-        .stat-label {
-            font-size: 0.75rem;
-            color: var(--text-dim);
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            margin-top: 0.25rem;
-        }
         
         /* Loading */
         #loading { display: none; padding: 3rem 0; }
@@ -588,7 +1061,7 @@ async def root():
         .loading-step.done { opacity: 0.8; color: var(--green); }
         
         /* Results */
-        #results { display: none; }
+        #results { display: none; padding: 2rem 0; }
         #results.active { display: block; }
         
         .result-header {
@@ -602,6 +1075,7 @@ async def root():
             margin-bottom: 1.5rem;
             font-size: 0.8rem;
             color: var(--text-muted);
+            flex-wrap: wrap;
         }
         
         .result-header code {
@@ -660,22 +1134,135 @@ async def root():
             color: var(--text-muted);
         }
         
-        /* Features */
-        .features-section {
-            margin-top: 4rem;
-            padding-top: 3rem;
-            border-top: 1px solid var(--border);
+        /* About Section */
+        #about {
+            padding: 6rem 0;
         }
         
-        .section-header { text-align: center; margin-bottom: 3rem; }
-        .section-header h2 { font-size: 1.5rem; font-weight: 700; margin-bottom: 0.5rem; }
-        .section-header p { color: var(--text-muted); }
+        .about-header {
+            text-align: center;
+            margin-bottom: 4rem;
+        }
+        
+        .about-header h2 {
+            font-size: 2rem;
+            font-weight: 700;
+            margin-bottom: 1rem;
+        }
+        
+        .about-header p {
+            color: var(--text-muted);
+            max-width: 600px;
+            margin: 0 auto;
+        }
+        
+        /* Map Section */
+        .map-section {
+            margin-bottom: 4rem;
+            border-radius: 12px;
+            overflow: hidden;
+            border: 1px solid var(--border);
+        }
+        
+        .map-header {
+            background: var(--surface);
+            padding: 1.25rem 1.5rem;
+            border-bottom: 1px solid var(--border);
+        }
+        
+        .map-header h3 {
+            font-size: 1.1rem;
+            font-weight: 600;
+            margin-bottom: 0.25rem;
+        }
+        
+        .map-header p {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+        }
+        
+        #map {
+            height: 400px;
+            background: #a8d5f5;
+        }
+        
+        .map-legend {
+            background: var(--surface);
+            padding: 1rem 1.5rem;
+            border-top: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 1.5rem;
+            flex-wrap: wrap;
+        }
+        
+        .legend-title {
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: var(--text-muted);
+        }
+        
+        .legend-scale { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+        
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 0.35rem;
+            font-size: 0.7rem;
+            color: var(--text-muted);
+        }
+        
+        .legend-color {
+            width: 16px;
+            height: 12px;
+            border-radius: 2px;
+        }
+        
+        /* Data Source */
+        .data-source {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 4rem;
+            text-align: center;
+        }
+        
+        .data-source p {
+            font-size: 0.9rem;
+            color: var(--text-muted);
+            margin-bottom: 0.5rem;
+        }
+        
+        .data-source a {
+            color: var(--gold);
+            text-decoration: none;
+            font-weight: 500;
+        }
+        
+        .data-source a:hover { text-decoration: underline; }
+        
+        .data-source .attribution {
+            font-size: 0.8rem;
+            color: var(--text-dim);
+            margin-top: 0.75rem;
+        }
+        
+        /* Comparison Section */
+        .comparison-section { margin-bottom: 4rem; }
+        
+        .comparison-section h3 {
+            font-size: 1.25rem;
+            font-weight: 600;
+            margin-bottom: 1.5rem;
+            text-align: center;
+        }
         
         .features-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-            gap: 1.5rem;
-            margin-bottom: 3rem;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1.25rem;
+            margin-bottom: 2.5rem;
         }
         
         .feature-card {
@@ -697,13 +1284,12 @@ async def root():
             margin-bottom: 1rem;
         }
         
-        .feature-card h3 { font-size: 1rem; font-weight: 600; margin-bottom: 0.5rem; }
-        .feature-card p { font-size: 0.875rem; color: var(--text-muted); line-height: 1.6; }
+        .feature-card h4 { font-size: 0.95rem; font-weight: 600; margin-bottom: 0.5rem; }
+        .feature-card p { font-size: 0.85rem; color: var(--text-muted); line-height: 1.6; }
         
         .comparison-table {
             width: 100%;
             border-collapse: collapse;
-            margin-bottom: 3rem;
             font-size: 0.875rem;
         }
         
@@ -726,7 +1312,6 @@ async def root():
         
         /* Footer */
         footer {
-            margin-top: 4rem;
             padding: 2rem 0;
             border-top: 1px solid var(--border);
             text-align: center;
@@ -742,7 +1327,7 @@ async def root():
         .footer-links a:hover { color: var(--gold); }
         .footer-credit { font-size: 0.75rem; color: var(--text-dim); }
         
-        /* Leaflet customization */
+        /* Leaflet */
         .leaflet-container { background: #a8d5f5; }
         .leaflet-control-zoom { border: 1px solid var(--border) !important; }
         .leaflet-control-zoom a {
@@ -766,28 +1351,39 @@ async def root():
         .country-tooltip strong { color: var(--gold); }
         
         @media (max-width: 640px) {
+            nav { padding: 1rem; }
+            .nav-links { gap: 1rem; }
             .container { padding: 1rem; }
-            .hero { padding: 2rem 0; }
+            .hero { padding: 5rem 0 3rem; min-height: auto; }
             .hero h1 { font-size: 2rem; }
-            .stats-bar { gap: 1.5rem; flex-wrap: wrap; }
-            .stat-value { font-size: 1.25rem; }
             .search-btn span { display: none; }
-            #map { height: 300px; }
-            .legend-scale { flex-wrap: wrap; }
+            #map { height: 280px; }
+            .legend-scale { gap: 0.25rem; }
         }
     </style>
 </head>
 <body>
+    <nav>
+        <div class="nav-content">
+            <a href="/" class="nav-logo">NSS<span>Intel</span></a>
+            <div class="nav-links">
+                <a href="/about">About</a>
+                <a href="https://github.com/KasperBuilds/NationalSecurityRAG" target="_blank">GitHub</a>
+            </div>
+        </div>
+    </nav>
+
     <div class="container">
-        <section class="hero">
+        <!-- Main Search Section -->
+        <section class="hero" id="home">
             <div class="badge">RAG-Powered Analysis</div>
             <h1>
                 National Security
                 <span>Strategy Intelligence</span>
             </h1>
             <p class="hero-subtitle">
-                Query national security documents using advanced 
-                retrieval-augmented generation for precise, sourced intelligence.
+                Query national security documents with retrieval-augmented generation. 
+                Sourced answers, not hallucinations.
             </p>
             
             <div class="search-container">
@@ -797,7 +1393,7 @@ async def root():
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
                         </svg>
                     </div>
-                    <input type="text" id="query-input" placeholder="Query national security strategy documents..." autocomplete="off">
+                    <input type="text" id="query-input" placeholder="Ask about national security strategies..." autocomplete="off">
                     <button class="search-btn" onclick="submitQuery()">
                         <span>Search</span>
                         <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -810,46 +1406,10 @@ async def root():
             <div class="examples">
                 <button class="example-btn" onclick="setQuery('What is the latest US NSS about?')">Latest US Strategy</button>
                 <button class="example-btn" onclick="setQuery('How does Japan view China as a threat?')">Japan on China</button>
-                <button class="example-btn" onclick="setQuery('Compare cyber security approaches across countries')">Cyber Comparison</button>
-                <button class="example-btn" onclick="setQuery('Evolution of NATO in European strategies')">NATO Evolution</button>
+                <button class="example-btn" onclick="setQuery('Compare cyber security approaches')">Cyber Comparison</button>
+                <button class="example-btn" onclick="setQuery('NATO in European strategies')">NATO Evolution</button>
             </div>
         </section>
-        
-        <!-- World Map -->
-        <section class="map-section">
-            <div class="map-header">
-                <h2>Global Document Coverage</h2>
-                <p>820 National Security Strategy documents spanning 112 countries from 1962 to 2025</p>
-            </div>
-            <div id="map"></div>
-            <div class="map-legend">
-                <span class="legend-title">Number of Documents</span>
-                <div class="legend-scale">
-                    <div class="legend-item"><div class="legend-color" style="background: #e8e0f0;"></div>0–1</div>
-                    <div class="legend-item"><div class="legend-color" style="background: #d4c4e8;"></div>1–5</div>
-                    <div class="legend-item"><div class="legend-color" style="background: #b9a3d4;"></div>5–10</div>
-                    <div class="legend-item"><div class="legend-color" style="background: #9d7fc0;"></div>10–15</div>
-                    <div class="legend-item"><div class="legend-color" style="background: #7c5aa8;"></div>15–20</div>
-                    <div class="legend-item"><div class="legend-color" style="background: #5c3d8a;"></div>20–25</div>
-                    <div class="legend-item"><div class="legend-color" style="background: #4a2c72;"></div>25–30</div>
-                </div>
-            </div>
-        </section>
-        
-        <div class="stats-bar">
-            <div class="stat">
-                <div class="stat-value" id="stat-chunks">70,000+</div>
-                <div class="stat-label">Document Chunks</div>
-            </div>
-            <div class="stat">
-                <div class="stat-value" id="stat-countries">20+</div>
-                <div class="stat-label">Countries</div>
-            </div>
-            <div class="stat">
-                <div class="stat-value" id="stat-years">1982–2025</div>
-                <div class="stat-label">Year Range</div>
-            </div>
-        </div>
         
         <div id="loading">
             <div class="loading-container">
@@ -866,7 +1426,7 @@ async def root():
         
         <div id="results">
             <div class="result-header">
-                <span>Query understood as:</span>
+                <span>Query:</span>
                 <code id="parsed-query"></code>
                 <span id="filters-display"></span>
             </div>
@@ -877,195 +1437,17 @@ async def root():
             </div>
         </div>
         
-        <section class="features-section">
-            <div class="section-header">
-                <h2>Why RAG Over Standard LLMs?</h2>
-                <p>Grounded answers from real documents, not hallucinations.</p>
-            </div>
-            
-            <div class="features-grid">
-                <div class="feature-card">
-                    <div class="feature-icon">🎯</div>
-                    <h3>Source-Grounded</h3>
-                    <p>Every claim links to specific documents and page numbers. Verify anything instantly.</p>
-                </div>
-                <div class="feature-card">
-                    <div class="feature-icon">🔍</div>
-                    <h3>Semantic Search</h3>
-                    <p>Finds conceptually relevant passages, not just keyword matches. Understands context and intent.</p>
-                </div>
-                <div class="feature-card">
-                    <div class="feature-icon">🧠</div>
-                    <h3>Smart Filtering</h3>
-                    <p>Automatically extracts country, year, and intent from natural language queries.</p>
-                </div>
-                <div class="feature-card">
-                    <div class="feature-icon">📊</div>
-                    <h3>Cross-Document Analysis</h3>
-                    <p>Compare strategies across countries and time periods with multi-document synthesis.</p>
-                </div>
-            </div>
-            
-            <table class="comparison-table">
-                <thead>
-                    <tr>
-                        <th>Capability</th>
-                        <th>This System</th>
-                        <th>ChatGPT/Claude</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <tr>
-                        <td>Page-level citations</td>
-                        <td><span class="check">✓ Always provided</span></td>
-                        <td><span class="cross">✗ Often fabricated</span></td>
-                    </tr>
-                    <tr>
-                        <td>2025 documents</td>
-                        <td><span class="check">✓ Included</span></td>
-                        <td><span class="cross">✗ Training cutoff</span></td>
-                    </tr>
-                    <tr>
-                        <td>Verifiable claims</td>
-                        <td><span class="check">✓ Check sources</span></td>
-                        <td><span class="cross">✗ Trust required</span></td>
-                    </tr>
-                    <tr>
-                        <td>Hallucination risk</td>
-                        <td><span class="check">✓ Minimal</span></td>
-                        <td><span class="cross">✗ Significant</span></td>
-                    </tr>
-                </tbody>
-            </table>
-        </section>
-        
         <footer>
             <div class="footer-links">
                 <a href="https://github.com/KasperBuilds/NationalSecurityRAG" target="_blank">GitHub</a>
-                <a href="/api/stats" target="_blank">API</a>
+                <a href="https://militarydoctrines.com/" target="_blank">Data Source</a>
             </div>
-            <p class="footer-credit">Built with ChromaDB, OpenAI, and Claude · Kasper Hong</p>
+            <p class="footer-credit">Built with ChromaDB · Kasper Hong</p>
         </footer>
     </div>
     
     <script>
-        // Country name mapping for GeoJSON
-        const countryNameMap = {
-            "United States of America": "United States",
-            "United States": "United States",
-            "USA": "United States",
-            "Russia": "Russia",
-            "Russian Federation": "Russia",
-            "United Kingdom": "United Kingdom",
-            "UK": "United Kingdom",
-            "Republic of Korea": "South Korea",
-            "Korea": "South Korea",
-            "Taiwan": "Taiwan",
-            "People's Republic of China": "China",
-            "Japan": "Japan",
-            "Czech Republic": "Czech Republic",
-            "Czechia": "Czech Republic"
-        };
-        
-        // Document counts per country (from the source data)
-        const docCounts = {
-            "Albania": 11, "Argentina": 4, "Armenia": 2, "Aruba": 1, "Australia": 13,
-            "Austria": 10, "Azerbaijan": 1, "Belarus": 2, "Belgium": 5, "Belize": 2,
-            "Bermuda": 1, "Bolivia": 3, "Bosnia": 3, "Brazil": 8, "Brunei": 3,
-            "Bulgaria": 8, "Burkina Faso": 1, "Cambodia": 4, "Canada": 5,
-            "Central African Republic": 2, "Chile": 4, "China": 11, "Colombia": 6,
-            "Cook Islands": 1, "Costa Rica": 2, "Croatia": 7, "Czech Republic": 16,
-            "Denmark": 11, "Dominican Republic": 1, "Ecuador": 7, "El Salvador": 2,
-            "Estonia": 10, "Ethiopia": 2, "Finland": 10, "France": 7, "Gambia": 1,
-            "Georgia": 8, "Germany": 9, "Greece": 4, "Guatemala": 7, "Guyana": 1,
-            "Haiti": 1, "Honduras": 1, "Hungary": 7, "Iceland": 1, "India": 17,
-            "Indonesia": 2, "Iraq": 1, "Ireland": 8, "Israel": 1, "Italy": 8,
-            "Jamaica": 3, "Japan": 21, "Kenya": 1, "Kyrgyzstan": 1, "Latvia": 12,
-            "Lebanon": 1, "Liberia": 2, "Lithuania": 13, "Luxembourg": 5, "Malaysia": 2,
-            "Maldives": 1, "Malta": 2, "Mexico": 5, "Moldova": 3, "Mongolia": 3,
-            "Montenegro": 4, "Nepal": 1, "Netherlands": 8, "New Zealand": 11,
-            "Nicaragua": 1, "Niger": 1, "Nigeria": 1, "North Macedonia": 4, "Norway": 12,
-            "Pakistan": 3, "Palau": 1, "Papua New Guinea": 1, "Paraguay": 1, "Peru": 2,
-            "Philippines": 4, "Poland": 9, "Portugal": 4, "Romania": 9, "Russia": 11,
-            "Rwanda": 1, "Samoa": 1, "Serbia": 4, "Sierra Leone": 1, "Singapore": 2,
-            "Slovakia": 7, "Slovenia": 13, "Solomon Islands": 1, "South Africa": 6,
-            "South Korea": 12, "Spain": 10, "Sweden": 5, "Switzerland": 5, "Taiwan": 23,
-            "Tanzania": 1, "Thailand": 2, "Timor-Leste": 1, "Trinidad and Tobago": 1,
-            "Turkey": 3, "Uganda": 1, "Ukraine": 13, "United Kingdom": 18, "Uruguay": 4,
-            "United States": 21, "Vanuatu": 1, "Vietnam": 2
-        };
-        
-        function getColor(count) {
-            if (count >= 25) return '#4a2c72';
-            if (count >= 20) return '#5c3d8a';
-            if (count >= 15) return '#7c5aa8';
-            if (count >= 10) return '#9d7fc0';
-            if (count >= 5) return '#b9a3d4';
-            if (count >= 1) return '#d4c4e8';
-            return '#e8e0f0';
-        }
-        
-        function getCountryCount(name) {
-            // Try direct match
-            if (docCounts[name]) return docCounts[name];
-            // Try mapped name
-            const mapped = countryNameMap[name];
-            if (mapped && docCounts[mapped]) return docCounts[mapped];
-            return 0;
-        }
-        
-        // Initialize map
-        const map = L.map('map', {
-            center: [30, 0],
-            zoom: 2,
-            minZoom: 1,
-            maxZoom: 6,
-            zoomControl: true
-        });
-        
-        // Add ocean background
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png', {
-            attribution: ''
-        }).addTo(map);
-        
-        // Load GeoJSON and add choropleth
-        fetch('https://raw.githubusercontent.com/datasets/geo-countries/master/data/countries.geojson')
-            .then(res => res.json())
-            .then(data => {
-                L.geoJSON(data, {
-                    style: function(feature) {
-                        const name = feature.properties.ADMIN || feature.properties.name;
-                        const count = getCountryCount(name);
-                        return {
-                            fillColor: getColor(count),
-                            weight: 0.5,
-                            opacity: 1,
-                            color: '#fff',
-                            fillOpacity: 0.85
-                        };
-                    },
-                    onEachFeature: function(feature, layer) {
-                        const name = feature.properties.ADMIN || feature.properties.name;
-                        const count = getCountryCount(name);
-                        if (count > 0) {
-                            layer.bindTooltip(
-                                `<strong>${name}</strong><br>${count} document${count > 1 ? 's' : ''}`,
-                                { className: 'country-tooltip', sticky: true }
-                            );
-                        }
-                        layer.on({
-                            mouseover: function(e) {
-                                e.target.setStyle({ weight: 2, color: '#d4a853' });
-                            },
-                            mouseout: function(e) {
-                                e.target.setStyle({ weight: 0.5, color: '#fff' });
-                            }
-                        });
-                    }
-                }).addTo(map);
-            });
-        
-        // Rest of the JS
+        // Search functionality
         const input = document.getElementById('query-input');
         const loading = document.getElementById('loading');
         const loadingText = document.getElementById('loading-text');
@@ -1075,22 +1457,8 @@ async def root():
         const parsedQueryEl = document.getElementById('parsed-query');
         const filtersDisplay = document.getElementById('filters-display');
         
-        const steps = ['Parse', 'Search', 'Retrieve', 'Generate'];
-        const stepTexts = ['Understanding your query...', 'Searching documents...', 'Retrieving relevant chunks...', 'Generating answer...'];
+        const stepTexts = ['Understanding query...', 'Searching documents...', 'Retrieving chunks...', 'Generating answer...'];
         let currentStep = 0;
-        
-        async function loadStats() {
-            try {
-                const res = await fetch('/api/stats');
-                const data = await res.json();
-                document.getElementById('stat-chunks').textContent = data.total_chunks.toLocaleString();
-                document.getElementById('stat-countries').textContent = data.countries;
-                if (data.year_range) {
-                    document.getElementById('stat-years').textContent = data.year_range[0] + '–' + data.year_range[1];
-                }
-            } catch (e) {}
-        }
-        loadStats();
         
         function resetSteps() {
             currentStep = 0;
@@ -1148,14 +1516,11 @@ async def root():
                 await new Promise(r => setTimeout(r, 200));
                 
                 parsedQueryEl.textContent = data.parsed_query.search_query || query;
-                if (Object.keys(data.filters).length > 0) {
-                    filtersDisplay.textContent = '| Filters: ' + JSON.stringify(data.filters);
-                } else {
-                    filtersDisplay.textContent = '';
-                }
+                filtersDisplay.textContent = Object.keys(data.filters).length > 0 
+                    ? '| Filters: ' + JSON.stringify(data.filters) 
+                    : '';
                 
                 answerDiv.innerHTML = marked.parse(data.answer);
-                
                 sourcesDiv.innerHTML = data.sources.map(s => 
                     '<span class="source-tag">' + s.country + ' (' + s.year + ') p.' + s.page + '</span>'
                 ).join('');
@@ -1163,7 +1528,7 @@ async def root():
                 loading.classList.remove('active');
                 results.classList.add('active');
                 
-                window.scrollTo({ top: results.offsetTop - 20, behavior: 'smooth' });
+                window.scrollTo({ top: results.offsetTop - 100, behavior: 'smooth' });
                 
             } catch (err) {
                 loading.classList.remove('active');
