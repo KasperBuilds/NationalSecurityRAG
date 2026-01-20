@@ -1500,7 +1500,7 @@ async def root():
                     body: JSON.stringify({ query })
                 });
                 
-                if (!response.ok) throw new Error('Query failed');
+                if (!response.ok) throw new Error('No API credits left!');
                 
                 const data = await response.json();
                 
