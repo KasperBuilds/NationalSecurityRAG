@@ -80,7 +80,7 @@ async def startup():
 
 def get_embedding(text: str) -> list[float]:
     response = openrouter_client.embeddings.create(
-        model="text-embedding-3-small",
+        model="openai/text-embedding-3-small",
         input=[text]
     )
     return response.data[0].embedding
@@ -98,7 +98,7 @@ def get_latest_year_for_country(country: str) -> int | None:
 
 def understand_query(query: str) -> dict:
     response = openrouter_client.chat.completions.create(
-        model="anthropic/claude-sonnet-4-20250514",
+        model="anthropic/claude-3.5-sonnet",
         max_tokens=300,
         messages=[
             {"role": "system", "content": f"""You are a query parser for a National Security Strategy document database.
@@ -214,7 +214,7 @@ Guidelines:
 Provide a well-structured answer with specific citations to the source documents."""
 
     response = openrouter_client.chat.completions.create(
-        model="anthropic/claude-sonnet-4-20250514",
+        model="anthropic/claude-3.5-sonnet",
         max_tokens=1500,
         messages=[
             {"role": "system", "content": system_prompt},
