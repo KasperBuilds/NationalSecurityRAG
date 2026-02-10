@@ -9,7 +9,6 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 import chromadb
 from openai import OpenAI
-import anthropic
 
 # Config
 CHROMA_PATH = os.environ.get("CHROMA_PATH", "./chroma_db")
@@ -25,8 +24,7 @@ AVAILABLE_COUNTRIES = [
 
 app = FastAPI(title="NSS Document Search")
 
-openai_client = None
-claude_client = None
+openrouter_client = None
 collection = None
 
 class QueryRequest(BaseModel):
@@ -53,12 +51,10 @@ def download_chroma_db(url: str, dest: str):
 
 @app.on_event("startup")
 async def startup():
-    global openai_client, claude_client, collection
+    global openrouter_client, collection
     
-    if not os.environ.get("OPENAI_API_KEY"):
-        raise RuntimeError("Set OPENAI_API_KEY environment variable")
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        raise RuntimeError("Set ANTHROPIC_API_KEY environment variable")
+    if not os.environ.get("OPENROUTER_API_KEY"):
+        raise RuntimeError("Set OPENROUTER_API_KEY environment variable")
     
     if not os.path.exists(CHROMA_PATH) or not os.listdir(CHROMA_PATH):
         print("📥 Database not found. Downloading from R2...")
@@ -73,15 +69,17 @@ async def startup():
         os.remove(zip_path)
         print("✓ Database ready!")
     
-    openai_client = OpenAI()
-    claude_client = anthropic.Anthropic()
+    openrouter_client = OpenAI(
+        base_url="https://openrouter.ai/api/v1",
+        api_key=os.environ.get("OPENROUTER_API_KEY")
+    )
     
     db = chromadb.PersistentClient(path=CHROMA_PATH)
     collection = db.get_collection("nss_documents")
     print(f"✓ Loaded {collection.count():,} chunks")
 
 def get_embedding(text: str) -> list[float]:
-    response = openai_client.embeddings.create(
+    response = openrouter_client.embeddings.create(
         model="text-embedding-3-small",
         input=[text]
     )
@@ -99,11 +97,11 @@ def get_latest_year_for_country(country: str) -> int | None:
     return None
 
 def understand_query(query: str) -> dict:
-    response = claude_client.messages.create(
-        model="claude-sonnet-4-20250514",
+    response = openrouter_client.chat.completions.create(
+        model="anthropic/claude-sonnet-4-20250514",
         max_tokens=300,
-        messages=[{"role": "user", "content": query}],
-        system=f"""You are a query parser for a National Security Strategy document database.
+        messages=[
+            {"role": "system", "content": f"""You are a query parser for a National Security Strategy document database.
 
 Extract structured filters from the user's question. Return ONLY valid JSON, no other text.
 
@@ -129,11 +127,13 @@ Rules:
 Examples:
 - "What is the latest US NSS about?" → {{"country": "United States", "wants_latest": true, "search_query": "main themes priorities objectives strategy overview"}}
 - "How has Japan's defense strategy evolved from 2010 to 2020?" → {{"country": "Japan", "year_min": 2010, "year_max": 2020, "search_query": "defense strategy evolution changes"}}
-- "Compare China and Russia on cyber threats" → {{"country": null, "search_query": "China Russia cyber threats cybersecurity comparison"}}"""
+- "Compare China and Russia on cyber threats" → {{"country": null, "search_query": "China Russia cyber threats cybersecurity comparison"}}"""},
+            {"role": "user", "content": query}
+        ]
     )
     
     try:
-        return json.loads(response.content[0].text)
+        return json.loads(response.choices[0].message.content)
     except json.JSONDecodeError:
         return {"search_query": query}
 
@@ -213,14 +213,16 @@ Guidelines:
 
 Provide a well-structured answer with specific citations to the source documents."""
 
-    response = claude_client.messages.create(
-        model="claude-sonnet-4-20250514",
+    response = openrouter_client.chat.completions.create(
+        model="anthropic/claude-sonnet-4-20250514",
         max_tokens=1500,
-        messages=[{"role": "user", "content": user_prompt}],
-        system=system_prompt
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
     )
     
-    return response.content[0].text
+    return response.choices[0].message.content
 
 @app.post("/api/query", response_model=QueryResponse)
 async def query_documents(request: QueryRequest):
@@ -1500,7 +1502,7 @@ async def root():
                     body: JSON.stringify({ query })
                 });
                 
-                if (!response.ok) throw new Error('No API credits left!');
+                if (!response.ok) throw new Error('no API credits left');
                 
                 const data = await response.json();
                 
