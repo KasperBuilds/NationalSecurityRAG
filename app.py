@@ -265,23 +265,30 @@ async def query_documents(request: QueryRequest):
 
 @app.get("/api/stats")
 async def get_stats():
-    all_meta = collection.get(include=["metadatas"])
-    
     countries = {}
     years = set()
     
-    for meta in all_meta["metadatas"]:
-        country = meta.get("country", "Unknown")
-        year = meta.get("year")
-        
-        if country not in countries:
-            countries[country] = set()
-        if year:
-            countries[country].add(year)
-            years.add(year)
+    total = collection.count()
+    batch_size = 5000
+    
+    for offset in range(0, total, batch_size):
+        batch = collection.get(
+            include=["metadatas"],
+            limit=batch_size,
+            offset=offset
+        )
+        for meta in batch["metadatas"]:
+            country = meta.get("country", "Unknown")
+            year = meta.get("year")
+            
+            if country not in countries:
+                countries[country] = set()
+            if year:
+                countries[country].add(year)
+                years.add(year)
     
     return {
-        "total_chunks": collection.count(),
+        "total_chunks": total,
         "countries": len(countries),
         "country_list": sorted(countries.keys()),
         "year_range": [min(years), max(years)] if years else None
