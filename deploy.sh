@@ -1,14 +1,20 @@
 #!/bin/bash
 # ==============================================================
-# NationalSecurityRAG - EC2 Deployment Script
-# Run this AFTER SSH-ing into your EC2 instance
-# Usage: bash deploy_ec2.sh
+# NationalSecurityRAG - DigitalOcean Droplet Deployment Script
+# Run this AFTER SSH-ing into your Droplet
+# Usage: bash deploy.sh
 # ==============================================================
 
 set -e
 
+# Detect the non-root user (DigitalOcean uses 'root' by default,
+# but you may have created a user like 'deploy' or 'ubuntu')
+APP_USER=${DEPLOY_USER:-root}
+APP_HOME=$(eval echo ~$APP_USER)
+
 echo "========================================="
-echo "  NationalSecurityRAG EC2 Setup"
+echo "  NationalSecurityRAG Droplet Setup"
+echo "  User: $APP_USER | Home: $APP_HOME"
 echo "========================================="
 
 # --- 1. System dependencies ---
@@ -18,7 +24,7 @@ sudo apt install -y python3-pip python3-venv git nginx certbot python3-certbot-n
 
 # --- 2. Clone repo ---
 echo "📥 Cloning repository..."
-cd /home/ubuntu
+cd $APP_HOME
 if [ -d "NationalSecurityRAG" ]; then
     echo "   Repo already exists, pulling latest..."
     cd NationalSecurityRAG && git pull
@@ -57,10 +63,10 @@ Description=National Security RAG FastAPI App
 After=network.target
 
 [Service]
-User=ubuntu
-WorkingDirectory=/home/ubuntu/NationalSecurityRAG
+User=$APP_USER
+WorkingDirectory=$APP_HOME/NationalSecurityRAG
 EnvironmentFile=/etc/nationalsecurityrag.env
-ExecStart=/home/ubuntu/NationalSecurityRAG/venv/bin/uvicorn app:app --host 0.0.0.0 --port 8000
+ExecStart=$APP_HOME/NationalSecurityRAG/venv/bin/uvicorn app:app --host 0.0.0.0 --port 8000
 Restart=on-failure
 RestartSec=5
 
@@ -109,10 +115,10 @@ echo "  1. Edit API keys:  sudo nano /etc/nationalsecurityrag.env"
 echo "  2. Restart app:    sudo systemctl restart nssrag"
 echo "  3. Check status:   sudo systemctl status nssrag"
 echo "  4. View logs:      sudo journalctl -u nssrag -f"
-echo "  5. Your site:      http://$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null || echo '<your-ec2-ip>')"
+echo "  5. Your site:      http://$(curl -s ifconfig.me 2>/dev/null || echo '<your-droplet-ip>')"
 echo ""
 echo "To add HTTPS with a custom domain:"
-echo "  1. Point your domain's A record to this server's IP"
+echo "  1. Point your domain's A record to this Droplet's IP"
 echo "  2. Edit /etc/nginx/sites-available/nssrag → change server_name to your domain"
 echo "  3. Run: sudo certbot --nginx -d yourdomain.com"
 echo ""

@@ -67,59 +67,62 @@ Query the document database.
 ### GET /api/stats
 Get database statistics (countries, years, chunk count).
 
-## Deploy to Railway
+## Deploy to DigitalOcean
 
-### Option 1: Quick Deploy (DB in repo)
+### 1. Create a Droplet
 
-If your `chroma_db` is small enough (<500MB), just include it in the repo:
+1. Go to [cloud.digitalocean.com](https://cloud.digitalocean.com) → **Create → Droplets**
+2. Choose **Ubuntu 22.04 LTS**, **$12/mo** (2 GB RAM / 1 vCPU / 50 GB disk)
+3. Add your **SSH key** and create
+
+### 2. SSH in and deploy
 
 ```bash
-# Initialize git repo
-git init
-git add .
-git commit -m "Initial commit"
+ssh root@<your-droplet-ip>
 
-# Push to GitHub
-gh repo create nss-search --public --push
-
-# Deploy on Railway
-# 1. Go to railway.app → New Project → Deploy from GitHub
-# 2. Select your repo
-# 3. Add environment variables:
-#    - OPENAI_API_KEY
-#    - ANTHROPIC_API_KEY
-# 4. Deploy!
+# Download and run the deploy script
+git clone https://github.com/KasperBuilds/NationalSecurityRAG.git
+cd NationalSecurityRAG
+bash deploy.sh
 ```
 
-### Option 2: Persistent Volume (Large DB)
+### 3. Set your API key
 
-For larger databases, use Railway volumes:
+```bash
+sudo nano /etc/nationalsecurityrag.env
+# Set: OPENROUTER_API_KEY=sk-or-your-real-key
+sudo systemctl restart nssrag
+```
 
-1. Create project on Railway
-2. Add a **Volume** and mount it at `/data`
-3. Update `app.py`:
-   ```python
-   CHROMA_PATH = "/data/chroma_db"  # Use volume path
-   ```
-4. Upload your `chroma_db` folder to the volume (via Railway CLI):
-   ```bash
-   railway volume upload ./chroma_db /data/chroma_db
-   ```
+### 4. Verify
+
+```bash
+curl http://localhost/api/stats
+```
+
+Or visit `http://<your-droplet-ip>` in your browser.
 
 ### Environment Variables
 
-Set these in Railway dashboard → Variables:
-
 | Variable | Value |
 |----------|-------|
-| `OPENAI_API_KEY` | `sk-...` |
-| `ANTHROPIC_API_KEY` | `sk-ant-...` |
+| `OPENROUTER_API_KEY` | `sk-or-...` |
+| `CHROMA_PATH` | `./chroma_db` (default) |
 
-### Custom Domain
+### Custom Domain + HTTPS
 
-Railway gives you a `.railway.app` URL automatically. To add custom domain:
-1. Settings → Domains → Add Custom Domain
-2. Add CNAME record pointing to your Railway URL
+1. Point your domain's **A record** to the Droplet IP
+2. Edit Nginx config: `sudo nano /etc/nginx/sites-available/nssrag` → set `server_name yourdomain.com`
+3. Run: `sudo certbot --nginx -d yourdomain.com`
+
+### Useful Commands
+
+| Action | Command |
+|--------|---------|
+| Restart app | `sudo systemctl restart nssrag` |
+| View logs | `sudo journalctl -u nssrag -f` |
+| Check status | `sudo systemctl status nssrag` |
+| Update code | `cd ~/NationalSecurityRAG && git pull && sudo systemctl restart nssrag` |
 
 ---
 
@@ -131,7 +134,7 @@ User Query
     ▼
 ┌─────────────────┐
 │ understand_query │ ← LLM extracts: country, year, intent
-│   (Claude)       │   rewrites query for semantic search
+│  (OpenRouter)    │   rewrites query for semantic search
 └────────┬────────┘
          │
          ▼
@@ -148,7 +151,7 @@ User Query
          ▼
 ┌─────────────────┐
 │ generate_answer  │ ← LLM synthesizes answer from chunks
-│    (Claude)      │
+│  (OpenRouter)    │
 └────────┬────────┘
          │
          ▼
